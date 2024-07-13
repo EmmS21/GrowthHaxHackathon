@@ -9,9 +9,7 @@ def scrape():
     web_html = requests.get("https://docs.dagger.io/").text
     soup = BeautifulSoup(web_html, "html.parser")
 
-    web_text = ' '.join([item.text for item in soup.find_all('p')])
-
-    return {"text": web_text}
+    return {"text": soup.get_text()}
 
 if __name__ == "__main__":
     import uvicorn
