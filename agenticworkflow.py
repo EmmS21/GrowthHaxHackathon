@@ -5,7 +5,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import os
 from dotenv import load_dotenv
 import tweepy
-# import google.ads.googleads.client
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
@@ -42,60 +41,88 @@ class AIMarketing:
                 print("Error fetching tweets", e)
                 return []
         @tool
-        def create_ads(ad_group_id, ads_data):
+        def create_ads(campaign_id, ad_group_id, ads_data):
             """
-            Creates multiple ads with specified text and keywords within an existing ad group.
+            Creates multiple ads with specified text, description, and keywords within an existing ad group.
 
             Args:
+                campaign_id (str): ID of the existing campaign where the ad group belongs.
                 ad_group_id (str): ID of the existing ad group where ads will be created.
-                ads_data (list of tuples): Each tuple contains ad text (str) and a list of keywords (list of str).
+                ads_data (list of dicts): Each dict contains headline_part1, headline_part2, description, and a list of keywords.
 
             Returns:
-                None
+                dict: A summary of created ads and keywords
             """
             credentials_path = "./credentials.json"
-            customer_id='378-415-3519'
+            
+            customer_id = '378-415-3519'
             google_ads_client = GoogleAdsClient.load_from_storage(credentials_path)
-            # google_ads_client = google.ads.google_ads.client.GoogleAdsClient.load_from_storage(credentials_path)        
+            
+            query = f'''
+                SELECT 
+                    ad_group.id, 
+                    ad_group.campaign 
+                FROM 
+                    ad_group 
+                WHERE 
+                    ad_group.id = '{ad_group_id}' 
+                    AND ad_group.campaign = '{campaign_id}'
+            '''
+            google_ads_service = google_ads_client.get_service("GoogleAdsService", version="v11")
+            response = google_ads_service.search(customer_id, query=query)
+            
+            if not any(response):
+                print(f"Ad group ID {ad_group_id} does not belong to campaign ID {campaign_id}")
+                return
+
             ad_group_ad_service = google_ads_client.get_service("AdGroupAdService", version="v11")
-            ad_group_ad_operations = []
+            ad_group_criterion_service = google_ads_client.get_service("AdGroupCriterionService", version="v11")
+            
+            created_ads = []
+            created_keywords = []
 
             for ad_data in ads_data:
-                ad_text, keywords = ad_data
+                headline_part1 = ad_data['headline_part1']
+                headline_part2 = ad_data['headline_part2']
+                description = ad_data['description']
+                keywords = ad_data['keywords']
                 ad_group_ad_operation = google_ads_client.get_type("AdGroupAdOperation", version="v11")
                 ad_group_ad = ad_group_ad_operation.create
-
                 ad_group_ad.ad_group = google_ads_client.get_service("AdGroupService", version="v11").ad_group_path(customer_id, ad_group_id)
-                ad_group_ad.ad.expanded_text_ad.headline_part1 = ad_text
-                ad_group_ad.ad.expanded_text_ad.headline_part2 = "Best Space Cruise Line"
-                ad_group_ad.ad.expanded_text_ad.description = "Buy your tickets now!"
-                ad_group_ad.status = google.ads.google_ads.enums.AdGroupAdStatusEnum.ENABLED
-
-                ad_group_ad_operations.append(ad_group_ad_operation)
-
-                ad_group_criterion_service = google_ads_client.get_service("AdGroupCriterionService", version="v11")
+                ad_group_ad.ad.expanded_text_ad.headline_part1 = headline_part1
+                ad_group_ad.ad.expanded_text_ad.headline_part2 = headline_part2
+                ad_group_ad.ad.expanded_text_ad.description = description
+                ad_group_ad.status = google_ads_client.enums.AdGroupAdStatusEnum.ENABLED
                 keyword_operations = []
                 for keyword in keywords:
                     ad_group_criterion_operation = google_ads_client.get_type("AdGroupCriterionOperation", version="v11")
                     ad_group_criterion = ad_group_criterion_operation.create
                     ad_group_criterion.ad_group = google_ads_client.get_service("AdGroupService", version="v11").ad_group_path(customer_id, ad_group_id)
                     ad_group_criterion.keyword.text = keyword
-                    ad_group_criterion.keyword.match_type = google.ads.google_ads.enums.KeywordMatchTypeEnum.EXACT
-                    ad_group_criterion.status = google.ads.google_ads.enums.AdGroupCriterionStatusEnum.ENABLED
+                    ad_group_criterion.keyword.match_type = google_ads_client.enums.KeywordMatchTypeEnum.EXACT
+                    ad_group_criterion.status = google_ads_client.enums.AdGroupCriterionStatusEnum.ENABLED
                     keyword_operations.append(ad_group_criterion_operation)
                 
                 try:
-                    ad_group_ad_response = ad_group_ad_service.mutate_ad_group_ads(customer_id, ad_group_ad_operations)
+                    ad_group_ad_response = ad_group_ad_service.mutate_ad_group_ads(customer_id, [ad_group_ad_operation])
                     ad_group_criterion_response = ad_group_criterion_service.mutate_ad_group_criteria(customer_id, keyword_operations)
+                    
+                    created_ads.append(ad_group_ad_response.results[0].resource_name)
+                    created_keywords.extend([result.resource_name for result in ad_group_criterion_response.results])
+                    
                     print(f"Created ad with resource name: {ad_group_ad_response.results[0].resource_name}")
                     for result in ad_group_criterion_response.results:
                         print(f"Created keyword with resource name: {result.resource_name}")
+                
                 except GoogleAdsException as ex:
                     for error in ex.failure.errors:
                         print(f"Error with message: {error.message}")
                         print(f"Error code: {error.error_code}")
-                    raise ex
-# create_ads('path/to/credentials.json', 'INSERT_CUSTOMER_ID_HERE', 'INSERT_AD_GROUP_ID_HERE', ads_data)
+            
+            return {
+                "created_ads": created_ads,
+                "created_keywords": created_keywords
+            }
 
         try:
             test_prompt = ChatPromptTemplate.from_messages(
@@ -109,16 +136,35 @@ class AIMarketing:
                      - structure the output of this response as a JSON for each user persona
 
                      3. **Listen to conversations people are having about the problems and group these into concise themes**
-                     - extract 3 appropriate keywords at most for each problem, pass the most appropriate of these into the search_tweets tool
+                     - extract 5 appropriate keywords at most for each problem, pass the most appropriate of these into the search_tweets tool
                      - for each run, use the output from the search_tweets to create themes of conversations people are having. Group these according to the problem they fall under
                      - return a JSON with each problem and the themes under each problem based on user conversation
 
-                     4. **Using the create_ads tool create a Google ad to target one of the user personas based on some of the things they are talking about
-                     - from all the information you have access to, pick a user persona
-                     - for this user persona, pick the best keywords we will use on the ad for this user based on some of the things they are currently talking about. The keys should best reflect these conversations
-                     - using a combination of the market, the user persona, their pain points, things they are talking about about problems we are solving, create ad text most appropriate to the user persona
-                     - create a group id for this ad and pass all this information into the create_ads tool
-                     """),
+                    4. **Using the create_ads tool, create Google ads for each of the user personas based on their conversations and pain points**
+                    - For each user persona:
+                        a) Select the best keywords for this user based on their conversations and pain points. Choose keywords that best reflect these discussions.
+                        b) Create ad content using a combination of:
+                            - Market understanding
+                            - User persona characteristics
+                            - User's pain points
+                            - Conversations about problems Dagger solves
+                        c) Construct the ad with the following components:
+                            - headline_part1: Create a compelling first headline (max 30 characters)
+                            - headline_part2: Create an engaging second headline (max 30 characters)
+                            - description: Write a detailed description (max 90 characters)
+                        d) Generate a unique ad group ID for this set of ads
+                        e) Pass the following information into the create_ads tool:
+                            - A dictionary containing:
+                                - 'campaign_id': A string representing the campaign ID
+                                - 'ad_group_id': A string representing the generated ad group ID
+                                - 'ads_data': A list of dictionaries, where each dictionary represents an ad and contains:
+                                - 'headline_part1': A string for the first headline
+                                - 'headline_part2': A string for the second headline
+                                - 'description': A string for the ad description
+                                - 'keywords': A list of strings representing the keywords for the ad
+                        f) Ensure all text elements (headlines and description) are within the specified character limits before passing them to the create_ads tool
+                            - Repeat this process for each identified user persona
+                            - After creating ads for all personas, provide a summary of the ads created, including the targeted persona, headlines, description, and keywords for each ad"""),
                      MessagesPlaceholder("chat_history", optional=True),
                      ("human", "{input}"),
                      MessagesPlaceholder("agent_scratchpad")
