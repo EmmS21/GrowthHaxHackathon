@@ -1,0 +1,14 @@
+{
+    "inventory": [
+        { 
+            "value": "student",
+            "name": "Username",
+            "type": "string" 
+        },
+        { 
+            "value": "Password123",
+            "name": "Password",
+            "type": "string"
+        }
+    ]
+}
