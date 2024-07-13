@@ -4,17 +4,40 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import os
 from dotenv import load_dotenv
+import tweepy
 
 load_dotenv()
 
 class AIMarketing:
     def getText(self, scrappedOutput):
         openai_api_key = os.getenv("OPENAI_API_KEY")
+        twitter_api_key = os.getenv("X_API_KEY")
+        twitter_secret = os.getenv("X_SECRET")
+        auth = tweepy.OAuth1UserHandler(twitter_api_key, twitter_secret)
+        api = tweepy.API(auth)
         llm = ChatOpenAI(model="gpt-4o", openai_api_key=openai_api_key, temperature=0)
         input_data = {
             "input": scrappedOutput,
             "agent_scratchpad": ""
         }
+        @tool
+        def search_tweets(keywords, count=10):
+            """
+            Search for tweets containing specific keywords and return their text content.
+
+            Args:
+                keywords (str): Keywords to search for in tweets.
+                count (int, optional): Number of tweets to retrieve (default is 10).
+
+            Returns:
+                list: List of tweet texts.
+            """
+            try:
+                tweets = tweepy.Cursor(api.search_tweets, q=keywords, lang="en").items(count)
+                return [tweet.text for tweet in tweets]
+            except Exception as e:
+                print("Error fetching tweets", e)
+                return []
         @tool
         def testing(output):
             "You don't need to use this tool as it's just a test"
@@ -29,13 +52,18 @@ class AIMarketing:
 
                      2. **Define the target audience and their user personas**
                      - structure the output of this response as a JSON for each user persona
+
+                     3. **Listen to conversations people are having about the problems and group these into concise themes**
+                     - extract 3 appropriate keywords at most for each problem, pass the most appropriate of these into the search_tweets tool
+                     - for each run, use the output from the search_tweets to create themes of conversations people are having. Group these according to the problem they fall under
+                     - return a JSON with each problem and the themes under each problem based on user conversation
                      """),
                      MessagesPlaceholder("chat_history", optional=True),
                      ("human", "{input}"),
                      MessagesPlaceholder("agent_scratchpad")
                 ]
             )
-            toolkit = [testing]
+            toolkit = [search_tweets]
             agent = create_openai_tools_agent(llm, toolkit, test_prompt)
             agent_executor = AgentExecutor(
                 agent=agent,
