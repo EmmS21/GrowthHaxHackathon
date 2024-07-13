@@ -5,6 +5,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import os
 from dotenv import load_dotenv
 import tweepy
+# import google.ads.googleads.client
+from google.ads.googleads.client import GoogleAdsClient
+from google.ads.googleads.errors import GoogleAdsException
 
 load_dotenv()
 
@@ -39,9 +42,61 @@ class AIMarketing:
                 print("Error fetching tweets", e)
                 return []
         @tool
-        def testing(output):
-            "You don't need to use this tool as it's just a test"
-            return output
+        def create_ads(ad_group_id, ads_data):
+            """
+            Creates multiple ads with specified text and keywords within an existing ad group.
+
+            Args:
+                ad_group_id (str): ID of the existing ad group where ads will be created.
+                ads_data (list of tuples): Each tuple contains ad text (str) and a list of keywords (list of str).
+
+            Returns:
+                None
+            """
+            credentials_path = "./credentials.json"
+            customer_id='378-415-3519'
+            google_ads_client = GoogleAdsClient.load_from_storage(credentials_path)
+            # google_ads_client = google.ads.google_ads.client.GoogleAdsClient.load_from_storage(credentials_path)        
+            ad_group_ad_service = google_ads_client.get_service("AdGroupAdService", version="v11")
+            ad_group_ad_operations = []
+
+            for ad_data in ads_data:
+                ad_text, keywords = ad_data
+                ad_group_ad_operation = google_ads_client.get_type("AdGroupAdOperation", version="v11")
+                ad_group_ad = ad_group_ad_operation.create
+
+                ad_group_ad.ad_group = google_ads_client.get_service("AdGroupService", version="v11").ad_group_path(customer_id, ad_group_id)
+                ad_group_ad.ad.expanded_text_ad.headline_part1 = ad_text
+                ad_group_ad.ad.expanded_text_ad.headline_part2 = "Best Space Cruise Line"
+                ad_group_ad.ad.expanded_text_ad.description = "Buy your tickets now!"
+                ad_group_ad.status = google.ads.google_ads.enums.AdGroupAdStatusEnum.ENABLED
+
+                ad_group_ad_operations.append(ad_group_ad_operation)
+
+                ad_group_criterion_service = google_ads_client.get_service("AdGroupCriterionService", version="v11")
+                keyword_operations = []
+                for keyword in keywords:
+                    ad_group_criterion_operation = google_ads_client.get_type("AdGroupCriterionOperation", version="v11")
+                    ad_group_criterion = ad_group_criterion_operation.create
+                    ad_group_criterion.ad_group = google_ads_client.get_service("AdGroupService", version="v11").ad_group_path(customer_id, ad_group_id)
+                    ad_group_criterion.keyword.text = keyword
+                    ad_group_criterion.keyword.match_type = google.ads.google_ads.enums.KeywordMatchTypeEnum.EXACT
+                    ad_group_criterion.status = google.ads.google_ads.enums.AdGroupCriterionStatusEnum.ENABLED
+                    keyword_operations.append(ad_group_criterion_operation)
+                
+                try:
+                    ad_group_ad_response = ad_group_ad_service.mutate_ad_group_ads(customer_id, ad_group_ad_operations)
+                    ad_group_criterion_response = ad_group_criterion_service.mutate_ad_group_criteria(customer_id, keyword_operations)
+                    print(f"Created ad with resource name: {ad_group_ad_response.results[0].resource_name}")
+                    for result in ad_group_criterion_response.results:
+                        print(f"Created keyword with resource name: {result.resource_name}")
+                except GoogleAdsException as ex:
+                    for error in ex.failure.errors:
+                        print(f"Error with message: {error.message}")
+                        print(f"Error code: {error.error_code}")
+                    raise ex
+# create_ads('path/to/credentials.json', 'INSERT_CUSTOMER_ID_HERE', 'INSERT_AD_GROUP_ID_HERE', ads_data)
+
         try:
             test_prompt = ChatPromptTemplate.from_messages(
                 [
@@ -57,13 +112,19 @@ class AIMarketing:
                      - extract 3 appropriate keywords at most for each problem, pass the most appropriate of these into the search_tweets tool
                      - for each run, use the output from the search_tweets to create themes of conversations people are having. Group these according to the problem they fall under
                      - return a JSON with each problem and the themes under each problem based on user conversation
+
+                     4. **Using the create_ads tool create a Google ad to target one of the user personas based on some of the things they are talking about
+                     - from all the information you have access to, pick a user persona
+                     - for this user persona, pick the best keywords we will use on the ad for this user based on some of the things they are currently talking about. The keys should best reflect these conversations
+                     - using a combination of the market, the user persona, their pain points, things they are talking about about problems we are solving, create ad text most appropriate to the user persona
+                     - create a group id for this ad and pass all this information into the create_ads tool
                      """),
                      MessagesPlaceholder("chat_history", optional=True),
                      ("human", "{input}"),
                      MessagesPlaceholder("agent_scratchpad")
                 ]
             )
-            toolkit = [search_tweets]
+            toolkit = [search_tweets, create_ads]
             agent = create_openai_tools_agent(llm, toolkit, test_prompt)
             agent_executor = AgentExecutor(
                 agent=agent,
